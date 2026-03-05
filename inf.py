@@ -2,6 +2,7 @@ import argparse, os, torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
 from transformers import AutoImageProcessor, AutoModelForImageClassification
+from tqdm import tqdm
 
 def main(output_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -29,10 +30,10 @@ def main(output_dir):
     preds_log, labels_log = [], []
 
     with torch.no_grad():
-        for imgs, labels in test_loader:    
+        for imgs, labels in tqdm(test_loader, desc="Evaluating", unit="batch"):
             batch = processor(
                 images=imgs, return_tensors="pt",
-                do_rescale=False,            
+                do_rescale=False,
                 data_format="channels_first"
             ).to(device)
             logits = model(**batch).logits
