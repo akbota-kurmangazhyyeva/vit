@@ -1,50 +1,46 @@
 import argparse, os, torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
-from transformers import ViTFeatureExtractor, ViTForImageClassification
-
-HF_CACHE = "/home/esrg/akbota/hf_cache"
+from transformers import ViTConfig, ViTForImageClassification
 
 def main(output_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    MODEL_NAME = "WinKawaks/vit-small-patch16-224"
+    # ViT-Small/16 expects 224x224, normalized with ImageNet stats
+    preprocess = transforms.Compose([
+        transforms.Resize((224, 224)),  # CIFAR10 is 32x32, must upscale
+        transforms.Normalize(
+            mean=[0.5, 0.5, 0.5],
+            std=[0.5, 0.5, 0.5]   # ViT models typically use 0.5/0.5 normalization
+        ),
+    ])
 
-    processor = ViTFeatureExtractor.from_pretrained(MODEL_NAME, cache_dir=HF_CACHE)
-
-    model = ViTForImageClassification.from_pretrained(MODEL_NAME, cache_dir=HF_CACHE)
-    # ignore_mismatched_sizes was added after 4.18, so swap the head manually.
-    in_features = model.classifier.in_features
-    model.classifier = torch.nn.Linear(in_features, 10)
-
-    state = torch.load(
-        "vit-small-patch16-224_cifar10_final.pth",
-        map_location="cpu",
+    model = ViTForImageClassification.from_pretrained(
+        "WinKawaks/vit-small-patch16-224",
+        num_labels=10,
+        ignore_mismatched_sizes=True
     )
+    state = torch.load('vit-small-patch16-224_cifar10_final.pth', map_location='cpu')
     model.load_state_dict(state, strict=False)
     model.to(device).eval()
 
     test_dataset = datasets.CIFAR10(
-        root="/home/esrg/Desktop/efficient_vit_new/data",
-        train=False,
-        download=True,
-        transform=transforms.ToTensor(),
+        root='/home/esrg/Desktop/efficient_vit_new/data',
+        train=False, download=True,
+        transform=transforms.ToTensor(),  # gives [0,1] float tensors
     )
     indices = list(range(1000))
-    test_loader = DataLoader(
-        Subset(test_dataset, indices), batch_size=64, shuffle=False
-    )
+    test_loader = DataLoader(Subset(test_dataset, indices), batch_size=64, shuffle=False)
 
     correct = n = 0
     preds_log, labels_log = [], []
 
     with torch.no_grad():
         for imgs, labels in test_loader:
-            imgs_np = (imgs.permute(0, 2, 3, 1).numpy() * 255).astype("uint8")
-            batch = processor(images=list(imgs_np), return_tensors="pt")
-            batch = {k: v.to(device) for k, v in batch.items()}
+            # imgs: [B, 3, 32, 32] float in [0,1]
+            imgs = preprocess(imgs).to(device)  # -> [B, 3, 224, 224] normalized
 
-            logits = model(**batch).logits
+            logits = model(pixel_values=imgs).logits
             preds = logits.argmax(dim=-1).cpu()
             correct += (preds == labels).sum().item()
             n += labels.size(0)
@@ -53,13 +49,11 @@ def main(output_dir):
 
     acc = correct / n
     print(f"vit_s: Accuracy on {n} test images: {acc:.4f}")
-
     os.makedirs(output_dir, exist_ok=True)
     with open(os.path.join(output_dir, "output_vit_s.csv"), "w") as f:
         f.write("index,prediction,true_label\n")
         for i, (p, t) in enumerate(zip(preds_log, labels_log)):
             f.write(f"{i},{p},{t}\n")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
