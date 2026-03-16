@@ -1,57 +1,59 @@
-import argparse, os, torch
-from torchvision import datasets, transforms
+import argparse
+import os
+import torch
+from torchvision import transforms, datasets
 from torch.utils.data import DataLoader, Subset
-from transformers import AutoImageProcessor, AutoModelForImageClassification
+import timm
+import random
 
 def main(output_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    processor = AutoImageProcessor.from_pretrained(
-        "WinKawaks/vit-small-patch16-224", use_fast=True
-    )
-    model = AutoModelForImageClassification.from_pretrained(
-        "WinKawaks/vit-small-patch16-224", num_labels=10, ignore_mismatched_sizes=True
-    )
-    state = torch.load('vit-small-patch16-224_cifar10_final.pth', map_location='cpu')
-    model.load_state_dict(state, strict=False)
-    model.to(device).eval()
+    full_model_name = "levit_conv_192.fb_dist_in1k"
+    model = timm.create_model(full_model_name, pretrained=True, num_classes=10)
+    model.load_state_dict(torch.load('levit_conv_192.fb_dist_in1k_cifar10_final.pth', map_location=torch.device('cpu'), weights_only=True))
+    model.to(device)
+    model.eval()
 
-    test_dataset = datasets.CIFAR10(
-        root='/home/esrg/Desktop/efficient_vit_new/data',
-        train=False, download=True,
-        transform=transforms.ToTensor(),
-    )
+    preprocess = transforms.Compose([
+        transforms.Resize(224),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], 
+            std=[0.229, 0.224, 0.225]
+        ),
+    ])
+
+    test_dataset = datasets.CIFAR10(root='/home/esrg/Desktop/efficient_vit_new/data', train=False, download=True, transform=preprocess)
 
     indices = list(range(1000))
-    test_loader = DataLoader(Subset(test_dataset, indices), batch_size=64, shuffle=False)
+    test_subset = Subset(test_dataset, indices)
+    test_loader = DataLoader(test_subset, batch_size=1, shuffle=False)
 
-    correct = n = 0
-    preds_log, labels_log = [], []
-
+    predictions = {}
+    true_labels = {}
     with torch.no_grad():
-        for imgs, labels in test_loader:    
-            batch = processor(
-                images=imgs, return_tensors="pt",
-                do_rescale=False,            
-                data_format="channels_first"
-            ).to(device)
-            logits = model(**batch).logits
-            preds = logits.argmax(dim=-1).cpu()
-            correct += (preds == labels).sum().item()
-            n += labels.size(0)
-            preds_log.extend(preds.tolist())
-            labels_log.extend(labels.tolist())
+        for i, (inputs, labels) in enumerate(test_loader):
+            inputs, labels = inputs.to(device), labels.to(device)
+            output = model(inputs)
+            _, predicted_idx = torch.max(output, 1)
+            predictions[i] = predicted_idx.item()
+            true_labels[i] = labels.item()
+            print(f"Image {i}: Predicted class index: {predicted_idx.item()}")
 
-    acc = correct / n
-    print(f"vit_s: Accuracy on {n} test images: {acc:.4f}")
+    correct = sum(1 for idx in predictions if predictions[idx] == true_labels[idx])
+    accuracy = correct / len(predictions)
+    print(f"levit_conv_192: Accuracy on 1000 test images: {accuracy:.4f}")
 
-    os.makedirs(output_dir, exist_ok=True)
-    with open(os.path.join(output_dir, "output_vit_s.csv"), "w") as f:
+    output_file = os.path.join(output_dir, "output_levit_conv_192.csv")
+    with open(output_file, "w") as f:
         f.write("index,prediction,true_label\n")
-        for i, (p, t) in enumerate(zip(preds_log, labels_log)):
-            f.write(f"{i},{p},{t}\n")
+        for idx in predictions:
+            f.write(f"{idx},{predictions[idx]},{true_labels[idx]}\n")
+    print(f"levit_conv_192: Saved predictions for {len(predictions)} images to {output_file}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("output_dir")
-    main(parser.parse_args().output_dir)
+    parser = argparse.ArgumentParser(description="Run inference on CIFAR-10 test subset")
+    parser.add_argument('output_dir', type=str, help='Output directory for results')
+    args = parser.parse_args()
+    main(args.output_dir)
