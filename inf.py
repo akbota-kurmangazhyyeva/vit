@@ -3,16 +3,16 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, Subset
 from transformers import ViTFeatureExtractor, ViTForImageClassification
 
+HF_CACHE = "/home/esrg/akbota/hf_cache"
 
 def main(output_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     MODEL_NAME = "WinKawaks/vit-small-patch16-224"
 
-    # In transformers 4.18, use ViTFeatureExtractor instead of AutoImageProcessor.
-    processor = ViTFeatureExtractor.from_pretrained(MODEL_NAME)
+    processor = ViTFeatureExtractor.from_pretrained(MODEL_NAME, cache_dir=HF_CACHE)
 
-    model = ViTForImageClassification.from_pretrained(MODEL_NAME)
+    model = ViTForImageClassification.from_pretrained(MODEL_NAME, cache_dir=HF_CACHE)
     # ignore_mismatched_sizes was added after 4.18, so swap the head manually.
     in_features = model.classifier.in_features
     model.classifier = torch.nn.Linear(in_features, 10)
@@ -40,10 +40,8 @@ def main(output_dir):
 
     with torch.no_grad():
         for imgs, labels in test_loader:
-            # ViTFeatureExtractor expects uint8 HWC numpy arrays, not float tensors.
             imgs_np = (imgs.permute(0, 2, 3, 1).numpy() * 255).astype("uint8")
             batch = processor(images=list(imgs_np), return_tensors="pt")
-            # .to(device) on BatchEncoding is unreliable in 4.18 — move manually.
             batch = {k: v.to(device) for k, v in batch.items()}
 
             logits = model(**batch).logits
