@@ -7,21 +7,19 @@ from transformers import ViTFeatureExtractor, ViTForImageClassification
 def main(output_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # AutoImageProcessor did not exist in 4.18; use ViTFeatureExtractor directly.
-    processor = ViTFeatureExtractor.from_pretrained(
-        "WinKawaks/vit-small-patch16-224"
-    )
+    MODEL_NAME = "WinKawaks/vit-small-patch16-224"
 
-    # ignore_mismatched_sizes was added after 4.18, so we swap the head manually.
-    model = ViTForImageClassification.from_pretrained(
-        "WinKawaks/vit-small-patch16-224"
-    )
-    # Replace the classifier head to match the target number of labels (10).
+    # In transformers 4.18, use ViTFeatureExtractor instead of AutoImageProcessor.
+    processor = ViTFeatureExtractor.from_pretrained(MODEL_NAME)
+
+    model = ViTForImageClassification.from_pretrained(MODEL_NAME)
+    # ignore_mismatched_sizes was added after 4.18, so swap the head manually.
     in_features = model.classifier.in_features
     model.classifier = torch.nn.Linear(in_features, 10)
 
     state = torch.load(
-        "vit-small-patch16-224_cifar10_final.pth", map_location="cpu"
+        "vit-small-patch16-224_cifar10_final.pth",
+        map_location="cpu",
     )
     model.load_state_dict(state, strict=False)
     model.to(device).eval()
@@ -42,19 +40,10 @@ def main(output_dir):
 
     with torch.no_grad():
         for imgs, labels in test_loader:
-            # ViTFeatureExtractor expects a list of PIL images or numpy arrays.
-            # Convert the float32 [0,1] tensor batch → list of uint8 numpy HWC arrays
-            # so the feature extractor can normalise them the same way the model
-            # was originally trained (mean/std from the pretrained config).
+            # ViTFeatureExtractor expects uint8 HWC numpy arrays, not float tensors.
             imgs_np = (imgs.permute(0, 2, 3, 1).numpy() * 255).astype("uint8")
-            imgs_list = list(imgs_np)  # list of H×W×C uint8 arrays
-
-            # In 4.18 the feature extractor handles rescaling & normalisation
-            # internally, so do NOT pass do_rescale / data_format.
-            batch = processor(images=imgs_list, return_tensors="pt")
-
-            # Move every tensor in the batch to the target device manually
-            # (.to(device) on the BatchEncoding object was not reliable in 4.18).
+            batch = processor(images=list(imgs_np), return_tensors="pt")
+            # .to(device) on BatchEncoding is unreliable in 4.18 — move manually.
             batch = {k: v.to(device) for k, v in batch.items()}
 
             logits = model(**batch).logits
